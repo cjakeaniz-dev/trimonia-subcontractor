@@ -1,0 +1,240 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  SUBCONTRACTOR
+}
+
+enum RecordStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum ExpenseStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model User {
+  id             String                        @id @default(uuid()) @db.Uuid
+  createdAt      DateTime                      @default(now())
+  updatedAt      DateTime                      @updatedAt
+  name           String
+  email          String                        @unique
+  passwordHash   String
+  role           Role
+  isActive       Boolean                       @default(true)
+  sessionVersion Int                           @default(0)
+  projects       ProjectManagerMembership[]
+  companies      SubcontractorUserMembership[]
+  submitted      Expense[]                     @relation("Submitter")
+  reviewed       Expense[]                     @relation("Reviewer")
+  adjustments    BudgetAdjustment[]
+  attachments    ExpenseAttachment[]
+  audit          AuditLog[]
+}
+
+model Project {
+  id          String                     @id @default(uuid()) @db.Uuid
+  createdAt   DateTime                   @default(now())
+  updatedAt   DateTime                   @updatedAt
+  code        String                     @unique
+  name        String
+  description String
+  location    String
+  startDate   DateTime                   @db.Date
+  targetDate  DateTime                   @db.Date
+  budget      Decimal                    @db.Decimal(18, 2)
+  status      RecordStatus               @default(ACTIVE)
+  managers    ProjectManagerMembership[]
+  assignments ProjectSubcontractor[]
+}
+
+model ProjectManagerMembership {
+  id        String   @id @default(uuid()) @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  projectId String   @db.Uuid
+  userId    String   @db.Uuid
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+model Subcontractor {
+  id          String                        @id @default(uuid()) @db.Uuid
+  createdAt   DateTime                      @default(now())
+  updatedAt   DateTime                      @updatedAt
+  companyName String
+  contactName String
+  email       String
+  phone       String
+  isActive    Boolean                       @default(true)
+  members     SubcontractorUserMembership[]
+  assignments ProjectSubcontractor[]
+}
+
+model SubcontractorUserMembership {
+  id              String        @id @default(uuid()) @db.Uuid
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  subcontractorId String        @db.Uuid
+  userId          String        @db.Uuid
+  subcontractor   Subcontractor @relation(fields: [subcontractorId], references: [id], onDelete: Restrict)
+  user            User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([subcontractorId, userId])
+  @@index([userId])
+}
+
+model ProjectSubcontractor {
+  id              String             @id @default(uuid()) @db.Uuid
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  projectId       String             @db.Uuid
+  subcontractorId String             @db.Uuid
+  scopeOfWork     String
+  initialBudget   Decimal            @db.Decimal(18, 2)
+  status          RecordStatus       @default(ACTIVE)
+  project         Project            @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  subcontractor   Subcontractor      @relation(fields: [subcontractorId], references: [id], onDelete: Restrict)
+  adjustments     BudgetAdjustment[]
+  expenses        Expense[]
+
+  @@index([projectId, subcontractorId])
+  @@index([subcontractorId])
+}
+
+model BudgetAdjustment {
+  id           String               @id @default(uuid()) @db.Uuid
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  assignmentId String               @db.Uuid
+  delta        Decimal              @db.Decimal(18, 2)
+  reason       String
+  createdById  String               @db.Uuid
+  assignment   ProjectSubcontractor @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  createdBy    User                 @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([assignmentId])
+}
+
+model ExpenseCategory {
+  id        String    @id @default(uuid()) @db.Uuid
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  name      String    @unique
+  isActive  Boolean   @default(true)
+  expenses  Expense[]
+}
+
+model Expense {
+  id              String               @id @default(uuid()) @db.Uuid
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  assignmentId    String               @db.Uuid
+  categoryId      String               @db.Uuid
+  supplier        String
+  transactionDate DateTime             @db.Date
+  description     String
+  status          ExpenseStatus        @default(DRAFT)
+  submittedById   String               @db.Uuid
+  submittedAt     DateTime?
+  reviewedById    String?              @db.Uuid
+  reviewedAt      DateTime?
+  reviewRemarks   String?
+  total           Decimal              @db.Decimal(18, 2)
+  assignment      ProjectSubcontractor @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  category        ExpenseCategory      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  submittedBy     User                 @relation("Submitter", fields: [submittedById], references: [id], onDelete: Restrict)
+  reviewedBy      User?                @relation("Reviewer", fields: [reviewedById], references: [id], onDelete: Restrict)
+  items           ExpenseItem[]
+  attachments     ExpenseAttachment[]
+
+  @@index([assignmentId, status, transactionDate])
+  @@index([categoryId, transactionDate])
+}
+
+model ExpenseItem {
+  id           String   @id @default(uuid()) @db.Uuid
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  expenseId    String   @db.Uuid
+  position     Int
+  materialName String
+  quantity     Decimal  @db.Decimal(18, 3)
+  unit         String
+  unitPrice    Decimal  @db.Decimal(18, 2)
+  lineTotal    Decimal  @db.Decimal(18, 2)
+  expense      Expense  @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+
+  @@unique([expenseId, position])
+}
+
+model ExpenseAttachment {
+  id               String   @id @default(uuid()) @db.Uuid
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  expenseId        String   @db.Uuid
+  storageKey       String   @unique
+  originalFilename String
+  mimeType         String
+  fileSize         Int
+  uploadedById     String   @db.Uuid
+  expense          Expense  @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+  uploadedBy       User     @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([expenseId])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  actorId    String   @db.Uuid
+  action     String
+  entityType String
+  entityId   String   @db.Uuid
+  beforeJson Json?
+  afterJson  Json?
+  actor      User     @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([createdAt])
+}
+
+model LoginThrottle {
+  key       String   @id
+  attempts  Int      @default(0)
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
+enum MasterDataKind {
+  UNIT
+  SUPPLIER
+  LOCATION
+}
+
+model MasterData {
+  id       String         @id @default(uuid()) @db.Uuid
+  kind     MasterDataKind
+  name     String
+  nameKey  String
+  isActive Boolean        @default(true)
+
+  @@unique([kind, nameKey])
+}

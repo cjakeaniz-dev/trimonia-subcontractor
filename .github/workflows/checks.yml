@@ -1,0 +1,68 @@
+name: MVP checks
+on: [push, pull_request]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ccbm
+          POSTGRES_PASSWORD: ci-database-only
+          POSTGRES_DB: ccbm_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ccbm -d ccbm_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ccbm:ci-database-only@127.0.0.1:5432/ccbm_test
+      AUTH_SECRET: ci-ephemeral-auth-secret-for-playwright
+      BOOTSTRAP_ADMIN_EMAIL: admin@example.test
+      BOOTSTRAP_ADMIN_PASSWORD: ci-browser-password
+      S3_BUCKET: ccbm-ci
+      S3_ENDPOINT: http://127.0.0.1:9000
+      S3_FORCE_PATH_STYLE: "true"
+      S3_ACCESS_KEY_ID: ccbm-ci
+      S3_SECRET_ACCESS_KEY: ccbm-ci-storage
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: |
+          docker run -d --name ccbm-ci-storage --publish 127.0.0.1:9000:9000 \
+            -e RUSTFS_ACCESS_KEY="$S3_ACCESS_KEY_ID" -e RUSTFS_SECRET_KEY="$S3_SECRET_ACCESS_KEY" \
+            rustfs/rustfs@sha256:ee717072290bec9b11abfc0365f8310b00df1cd9b3639943edae47bdef05044a
+          node --input-type=commonjs <<'JS'
+          const { S3Client, CreateBucketCommand } = require("@aws-sdk/client-s3");
+          const client = new S3Client({
+            region: "us-east-1",
+            endpoint: process.env.S3_ENDPOINT,
+            forcePathStyle: true,
+            credentials: { accessKeyId: process.env.S3_ACCESS_KEY_ID, secretAccessKey: process.env.S3_SECRET_ACCESS_KEY },
+          });
+          async function main() {
+            for (let attempt = 0; ; attempt++) {
+              try {
+                await client.send(new CreateBucketCommand({ Bucket: process.env.S3_BUCKET }));
+                return;
+              } catch (error) {
+                if (attempt === 19) throw error;
+                await new Promise(resolve => setTimeout(resolve, 1500));
+              }
+            }
+          }
+          main().catch(error => { console.error(error); process.exitCode = 1; });
+          JS
+      - run: npx prisma migrate deploy
+      - run: npm run db:seed
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:integration
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
