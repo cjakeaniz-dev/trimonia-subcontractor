@@ -6,9 +6,19 @@ import { audit } from "../src/lib/mutations";
 const password = z.string().min(12).refine(value => Buffer.byteLength(value) <= 72);
 
 async function seedDemo() {
-  if (process.env.NODE_ENV === "production" || process.env.CCBM_DEMO_SEED !== "1") {
-    throw new Error("Set CCBM_DEMO_SEED=1 against a dedicated local demo database.");
-  }
+const isProduction = process.env.NODE_ENV === "production";
+
+const allowCloudDemo =
+  process.env.CCBM_ALLOW_CLOUD_DEMO_SEED === "1";
+
+const demoSeedEnabled =
+  process.env.CCBM_DEMO_SEED === "1";
+
+if (!demoSeedEnabled || (isProduction && !allowCloudDemo)) {
+  throw new Error(
+    "Demo seeding is not authorized for this environment."
+  );
+}
 
   const [adminHash, managerHash, subcontractorHash] = await Promise.all(
     ["DEMO_ADMIN_PASSWORD", "DEMO_MANAGER_PASSWORD", "DEMO_SUBCONTRACTOR_PASSWORD"]
